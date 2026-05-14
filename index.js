@@ -1,5 +1,8 @@
 require('dotenv').config();
 
+const fs = require('fs');
+const path = require('path');
+
 const {
     Client,
     GatewayIntentBits,
@@ -29,6 +32,7 @@ CONFIG
 const EMOJI = '💉';
 const LEADERBOARD_CHANNEL_ID = process.env.LEADERBOARD_CHANNEL_ID;
 const TOP_ROLE_ID = process.env.TOP_RESPONDER_ROLE_ID;
+const CLIENT_ID = process.env.CLIENT_ID;
 
 /*
 =====================================
@@ -37,6 +41,7 @@ VALIDATION
 */
 if (!process.env.TOKEN) throw new Error("Missing TOKEN");
 if (!LEADERBOARD_CHANNEL_ID) throw new Error("Missing LEADERBOARD_CHANNEL_ID");
+if (!CLIENT_ID) console.warn("⚠️ Missing CLIENT_ID (slash commands will fail)");
 if (!TOP_ROLE_ID) console.warn("⚠️ TOP_RESPONDER_ROLE_ID not set (role system disabled)");
 
 /*
@@ -59,12 +64,24 @@ const client = new Client({
 
 /*
 =====================================
-DATABASE (PERSISTENT - FLY.IO)
+DATABASE (FIXED FOR FLY.IO)
 =====================================
 */
-const db = new sqlite3.Database('/data/leaderboard.db');
+
+// ensure /data exists (CRITICAL on Fly)
+const dataDir = '/data';
+if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+}
+
+const dbPath = path.join(dataDir, 'leaderboard.db');
+const db = new sqlite3.Database(dbPath, (err) => {
+    if (err) console.error("DB ERROR:", err);
+    else console.log("📦 SQLite connected:", dbPath);
+});
 
 db.serialize(() => {
+
     db.run(`CREATE TABLE IF NOT EXISTS leaderboard (
         user_id TEXT PRIMARY KEY,
         username TEXT,
@@ -93,6 +110,8 @@ SLASH COMMAND REGISTRATION
 =====================================
 */
 async function registerCommands() {
+    if (!CLIENT_ID) return;
+
     const commands = [
         new SlashCommandBuilder()
             .setName('reset-leaderboard')
@@ -102,12 +121,16 @@ async function registerCommands() {
 
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 
-    await rest.put(
-        Routes.applicationCommands(process.env.CLIENT_ID),
-        { body: commands }
-    );
+    try {
+        await rest.put(
+            Routes.applicationCommands(CLIENT_ID),
+            { body: commands }
+        );
 
-    console.log("Slash commands registered.");
+        console.log("Slash commands registered.");
+    } catch (err) {
+        console.error("Slash command error:", err);
+    }
 }
 
 /*
@@ -140,40 +163,25 @@ client.once('ready', async () => {
 
 /*
 =====================================
-SLASH COMMAND HANDLER
+SLASH COMMAND
 =====================================
 */
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
     if (interaction.commandName !== 'reset-leaderboard') return;
 
-    if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) {
-        return interaction.reply({
-            content: "❌ Admin only.",
-            ephemeral: true
-        });
+    if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) {
+        return interaction.reply({ content: "❌ Admin only.", ephemeral: true });
     }
 
-    try {
-        await interaction.reply({ content: "Resetting leaderboard...", ephemeral: true });
+    await interaction.reply({ content: "Resetting leaderboard...", ephemeral: true });
 
-        db.run(`UPDATE leaderboard SET points = 0`);
-        db.run(`DELETE FROM claims`);
+    db.run(`UPDATE leaderboard SET points = 0`);
+    db.run(`DELETE FROM claims`);
 
-        await updateLeaderboard();
+    await updateLeaderboard();
 
-        await interaction.followUp({
-            content: "✅ Leaderboard reset complete.",
-            ephemeral: true
-        });
-
-    } catch (err) {
-        console.error(err);
-        await interaction.followUp({
-            content: "❌ Reset failed.",
-            ephemeral: true
-        });
-    }
+    await interaction.followUp({ content: "✅ Reset complete.", ephemeral: true });
 });
 
 /*
@@ -209,180 +217,33 @@ async function updateLeaderboard() {
         if (err || !row) return;
 
         const channel = await client.channels.fetch(LEADERBOARD_CHANNEL_ID);
-        if (!channel) return;
-
         const message = await channel.messages.fetch(row.value);
 
         db.all(
             `SELECT username, points FROM leaderboard ORDER BY points DESC LIMIT 50`,
             async (err, rows) => {
+
                 if (err) return;
 
-                let board = "";
+                let board = "No activity yet.";
 
-                if (!rows || rows.length === 0) {
-                    board = "No activity yet.";
-                } else {
-                    rows.forEach((r, i) => {
+                if (rows?.length) {
+                    board = rows.map((r, i) => {
                         const medal =
                             i === 0 ? '🥇' :
                             i === 1 ? '🥈' :
                             i === 2 ? '🥉' :
                             `${i + 1}.`;
 
-                        board += `${medal} ${r.username} — ${r.points} 💉\n`;
-                    });
+                        return `${medal} ${r.username} — ${r.points} 💉`;
+                    }).join("\n");
                 }
 
-                await message.edit({
-                    embeds: [buildEmbed(board)]
-                });
+                await message.edit({ embeds: [buildEmbed(board)] });
             }
         );
     });
 }
-
-/*
-=====================================
-SEASON RESET + MVP ROLE
-=====================================
-*/
-async function checkSeasonReset() {
-    const current = getSeasonKey();
-
-    db.get(`SELECT value FROM seasons WHERE key='current'`, async (err, row) => {
-        if (!row) {
-            db.run(`INSERT INTO seasons(key,value) VALUES('current',?)`, [current]);
-            return;
-        }
-
-        if (row.value === current) return;
-
-        const channel = await client.channels.fetch(LEADERBOARD_CHANNEL_ID);
-        if (!channel) return;
-
-        const topUser = await getTopUser();
-        const guild = channel.guild;
-
-        let newMVP = null;
-
-        if (TOP_ROLE_ID) {
-            try {
-                const members = await guild.members.fetch();
-                const oldMVP = members.find(m => m.roles.cache.has(TOP_ROLE_ID));
-
-                if (oldMVP) {
-                    await oldMVP.roles.remove(TOP_ROLE_ID).catch(() => {});
-                }
-            } catch (e) {
-                console.error("Failed removing old MVP:", e);
-            }
-        }
-
-        if (topUser && TOP_ROLE_ID) {
-            try {
-                const member = await guild.members.fetch(topUser.user_id);
-                await member.roles.add(TOP_ROLE_ID);
-                newMVP = member;
-            } catch (e) {
-                console.error("MVP role assignment failed:", e);
-            }
-        }
-
-        await channel.send({
-            embeds: [
-                new EmbedBuilder()
-                    .setTitle(`🏁 Season Complete — ${row.value}`)
-                    .setDescription(
-`**🏆 MVP**
-${topUser ? `${topUser.username} — ${topUser.points}` : 'None'}
-
-${newMVP ? `🎖 Role assigned to ${newMVP.user.username}` : ''}
-
-A new quarter has started. All scores have been reset.`
-                    )
-            ]
-        });
-
-        db.run(`UPDATE leaderboard SET points=0`);
-        db.run(`UPDATE seasons SET value=? WHERE key='current'`, [current]);
-    });
-}
-
-/*
-=====================================
-REACTION TRACKING
-=====================================
-*/
-client.on('messageReactionAdd', async (reaction, user) => {
-    try {
-        if (user.bot) return;
-
-        if (reaction.partial) await reaction.fetch();
-        if (reaction.emoji.name !== EMOJI) return;
-
-        db.get(`SELECT * FROM claims WHERE message_id=?`, [reaction.message.id], async (err, row) => {
-            if (row) {
-                return reaction.users.remove(user.id).catch(() => {});
-            }
-
-            db.run(`INSERT INTO claims(message_id,claimed_by) VALUES(?,?)`,
-                [reaction.message.id, user.id]);
-
-            db.run(`
-                INSERT INTO leaderboard(user_id,username,points)
-                VALUES(?,?,1)
-                ON CONFLICT(user_id)
-                DO UPDATE SET
-                    points = points + 1,
-                    username = excluded.username
-            `, [user.id, user.username]);
-
-            await updateLeaderboard();
-        });
-
-    } catch (err) {
-        console.error(err);
-    }
-});
-
-/*
-=====================================
-ADMIN COMMANDS
-=====================================
-*/
-client.on('messageCreate', async (message) => {
-    if (message.author.bot) return;
-    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
-
-    const args = message.content.trim().split(/\s+/);
-    const cmd = args[0];
-
-    if (cmd !== '!add' && cmd !== '!remove') return;
-
-    const user = message.mentions.users.first();
-    if (!user) return message.reply("Mention a user.");
-
-    const amount = parseInt(args[2] || "1");
-    if (isNaN(amount)) return message.reply("Invalid number.");
-
-    const delta = cmd === '!add' ? amount : -amount;
-
-    db.run(`
-        INSERT INTO leaderboard(user_id,username,points)
-        VALUES(?,?,?)
-        ON CONFLICT(user_id)
-        DO UPDATE SET
-            points = points + ?,
-            username = excluded.username
-    `, [user.id, user.username, delta, delta]);
-
-    await updateLeaderboard();
-
-    message.reply(
-        `${cmd === '!add' ? 'Added' : 'Removed'} ${Math.abs(delta)} points for ${user.username}`
-    );
-});
 
 /*
 =====================================
@@ -391,33 +252,9 @@ UTILS
 */
 function buildEmbed(boardText) {
     return new EmbedBuilder()
-        .setTitle(`💉 Top Responder Leaderboard — ${getSeasonKey()}`)
-        .setDescription(
-`**What this is**
-Tracks completed revives across each quarter.
-
-**How it works**
-- React 💉 = +1 point
-- Each message counts once per user
-- Resets each quarter
-
----
-
-**Leaderboard**
-${boardText}`
-        )
-        .setFooter({
-            text: `Updated ${new Date().toLocaleString()}`
-        });
-}
-
-async function getTopUser() {
-    return new Promise(res => {
-        db.get(
-            `SELECT user_id, username, points FROM leaderboard ORDER BY points DESC LIMIT 1`,
-            (err, row) => res(row || null)
-        );
-    });
+        .setTitle(`💉 Leaderboard — ${getSeasonKey()}`)
+        .setDescription(boardText)
+        .setFooter({ text: `Updated ${new Date().toLocaleString()}` });
 }
 
 /*
