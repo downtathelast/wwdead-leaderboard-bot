@@ -11,12 +11,7 @@ const {
     SlashCommandBuilder
 } = require('discord.js');
 
-require('dotenv').config();
-
 const sqlite3 = require('sqlite3').verbose();
-const db = new sqlite3.Database(':memory:');
-
-db.run(`CREATE TABLE IF NOT EXISTS leaderboard (...)`);
 
 /*
 =====================================
@@ -64,29 +59,33 @@ const client = new Client({
 
 /*
 =====================================
-DATABASE
+DATABASE (PERSISTENT - FLY.IO)
 =====================================
 */
-db.run(`CREATE TABLE IF NOT EXISTS leaderboard (
-    user_id TEXT PRIMARY KEY,
-    username TEXT,
-    points INTEGER DEFAULT 0
-)`);
+const db = new sqlite3.Database('/data/leaderboard.db');
 
-db.run(`CREATE TABLE IF NOT EXISTS claims (
-    message_id TEXT PRIMARY KEY,
-    claimed_by TEXT
-)`);
+db.serialize(() => {
+    db.run(`CREATE TABLE IF NOT EXISTS leaderboard (
+        user_id TEXT PRIMARY KEY,
+        username TEXT,
+        points INTEGER DEFAULT 0
+    )`);
 
-db.run(`CREATE TABLE IF NOT EXISTS config (
-    key TEXT PRIMARY KEY,
-    value TEXT
-)`);
+    db.run(`CREATE TABLE IF NOT EXISTS claims (
+        message_id TEXT PRIMARY KEY,
+        claimed_by TEXT
+    )`);
 
-db.run(`CREATE TABLE IF NOT EXISTS seasons (
-    key TEXT PRIMARY KEY,
-    value TEXT
-)`);
+    db.run(`CREATE TABLE IF NOT EXISTS config (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS seasons (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )`);
+});
 
 /*
 =====================================
@@ -104,7 +103,7 @@ async function registerCommands() {
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 
     await rest.put(
-        Routes.applicationCommands(client.user.id),
+        Routes.applicationCommands(process.env.CLIENT_ID),
         { body: commands }
     );
 
@@ -146,7 +145,6 @@ SLASH COMMAND HANDLER
 */
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
-
     if (interaction.commandName !== 'reset-leaderboard') return;
 
     if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) {
@@ -207,7 +205,6 @@ UPDATE LEADERBOARD
 =====================================
 */
 async function updateLeaderboard() {
-
     db.get(`SELECT value FROM config WHERE key='leaderboard_message'`, async (err, row) => {
         if (err || !row) return;
 
@@ -219,7 +216,6 @@ async function updateLeaderboard() {
         db.all(
             `SELECT username, points FROM leaderboard ORDER BY points DESC LIMIT 50`,
             async (err, rows) => {
-
                 if (err) return;
 
                 let board = "";
@@ -252,11 +248,9 @@ SEASON RESET + MVP ROLE
 =====================================
 */
 async function checkSeasonReset() {
-
     const current = getSeasonKey();
 
     db.get(`SELECT value FROM seasons WHERE key='current'`, async (err, row) => {
-
         if (!row) {
             db.run(`INSERT INTO seasons(key,value) VALUES('current',?)`, [current]);
             return;
@@ -321,7 +315,6 @@ REACTION TRACKING
 =====================================
 */
 client.on('messageReactionAdd', async (reaction, user) => {
-
     try {
         if (user.bot) return;
 
@@ -329,7 +322,6 @@ client.on('messageReactionAdd', async (reaction, user) => {
         if (reaction.emoji.name !== EMOJI) return;
 
         db.get(`SELECT * FROM claims WHERE message_id=?`, [reaction.message.id], async (err, row) => {
-
             if (row) {
                 return reaction.users.remove(user.id).catch(() => {});
             }
@@ -360,7 +352,6 @@ ADMIN COMMANDS
 =====================================
 */
 client.on('messageCreate', async (message) => {
-
     if (message.author.bot) return;
     if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
 
@@ -406,10 +397,9 @@ function buildEmbed(boardText) {
 Tracks completed revives across each quarter.
 
 **How it works**
-- React to revive request with 💉 to earn points
+- React 💉 = +1 point
 - Each message counts once per user
-- Scores reset every quarter
-- Abusing the system can result in a ban
+- Resets each quarter
 
 ---
 
@@ -425,9 +415,7 @@ async function getTopUser() {
     return new Promise(res => {
         db.get(
             `SELECT user_id, username, points FROM leaderboard ORDER BY points DESC LIMIT 1`,
-            (err, row) => {
-                res(row || null);
-            }
+            (err, row) => res(row || null)
         );
     });
 }
