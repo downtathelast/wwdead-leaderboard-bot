@@ -1,0 +1,21 @@
+# fly.toml app configuration file generated for mcdreamy-bot on 2026-05-13T11:28:15-07:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'mcdreamy-bot'
+primary_region = 'sjc'
+
+[build]
+
+[[mounts]]
+  source = 'data'
+  destination = '/data'
+  auto_extend_size_threshold = 80
+  auto_extend_size_increment = '1GB'
+  auto_extend_size_limit = '10GB'
+
+[[vm]]
+  memory = '1gb'
+  cpus = 1
+  memory_mb = 1024
