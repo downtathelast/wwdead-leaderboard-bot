@@ -116,6 +116,11 @@ async function registerCommands() {
         new SlashCommandBuilder()
             .setName('reset-leaderboard')
             .setDescription('Reset leaderboard (Admin only)')
+            .toJSON(),
+
+        new SlashCommandBuilder()
+            .setName('refresh-leaderboard')
+            .setDescription('Force refresh leaderboard embed (Admin only)')
             .toJSON()
     ];
 
@@ -236,20 +241,45 @@ SLASH COMMAND
 */
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
-    if (interaction.commandName !== 'reset-leaderboard') return;
 
-    if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) {
-        return interaction.reply({ content: "❌ Admin only.", ephemeral: true });
+    // -------------------------
+    // ADMIN CHECK (shared)
+    // -------------------------
+    const isAdmin = interaction.memberPermissions?.has(
+        PermissionsBitField.Flags.Administrator
+    );
+
+    if (!isAdmin) {
+        return interaction.reply({
+            content: "❌ Admin only.",
+            ephemeral: true
+        });
     }
 
-    await interaction.reply({ content: "Resetting leaderboard...", ephemeral: true });
+    // -------------------------
+    // RESET COMMAND
+    // -------------------------
+    if (interaction.commandName === 'reset-leaderboard') {
+        await interaction.reply({ content: "Resetting leaderboard...", ephemeral: true });
 
-    db.run(`UPDATE leaderboard SET points = 0`);
-    db.run(`DELETE FROM claims`);
+        db.run(`UPDATE leaderboard SET points = 0`);
+        db.run(`DELETE FROM claims`);
 
-    await updateLeaderboard();
+        await updateLeaderboard();
 
-    await interaction.followUp({ content: "✅ Reset complete.", ephemeral: true });
+        return interaction.followUp({ content: "✅ Reset complete.", ephemeral: true });
+    }
+
+    // -------------------------
+    // REFRESH COMMAND
+    // -------------------------
+    if (interaction.commandName === 'refresh-leaderboard') {
+        await interaction.reply({ content: "🔄 Refreshing leaderboard...", ephemeral: true });
+
+        await updateLeaderboard();
+
+        return interaction.followUp({ content: "✅ Updated.", ephemeral: true });
+    }
 });
 
 /*
