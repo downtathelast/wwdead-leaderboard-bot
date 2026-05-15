@@ -121,6 +121,34 @@ async function registerCommands() {
         new SlashCommandBuilder()
             .setName('refresh-leaderboard')
             .setDescription('Force refresh leaderboard embed (Admin only)')
+            .toJSON(),
+
+        new SlashCommandBuilder()
+            .setName('addpoints')
+            .setDescription('Add points to a user (Admin only)')
+            .addUserOption(option =>
+                option.setName('user')
+                    .setDescription('The user to add points to')
+                    .setRequired(true))
+            .addIntegerOption(option =>
+                option.setName('amount')
+                    .setDescription('Number of points to add')
+                    .setRequired(true)
+                    .setMinValue(1))
+            .toJSON(),
+
+        new SlashCommandBuilder()
+            .setName('removepoints')
+            .setDescription('Remove points from a user (Admin only)')
+            .addUserOption(option =>
+                option.setName('user')
+                    .setDescription('The user to remove points from')
+                    .setRequired(true))
+            .addIntegerOption(option =>
+                option.setName('amount')
+                    .setDescription('Number of points to remove')
+                    .setRequired(true)
+                    .setMinValue(1))
             .toJSON()
     ];
 
@@ -250,7 +278,6 @@ client.on('messageReactionAdd', async (reaction, user) => {
     const messageId = reaction.message.id;
     const userId = user.id;
 
-    // Prevent self-reaction
     if (reaction.message.author?.id === userId) return;
 
     db.get(
@@ -294,6 +321,9 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: "❌ Admin only.", ephemeral: true });
     }
 
+    // -------------------------
+    // RESET
+    // -------------------------
     if (interaction.commandName === 'reset-leaderboard') {
         await interaction.reply({ content: "Resetting leaderboard...", ephemeral: true });
 
@@ -305,12 +335,75 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.followUp({ content: "✅ Reset complete.", ephemeral: true });
     }
 
+    // -------------------------
+    // REFRESH
+    // -------------------------
     if (interaction.commandName === 'refresh-leaderboard') {
         await interaction.reply({ content: "🔄 Refreshing leaderboard...", ephemeral: true });
 
         await updateLeaderboard();
 
         return interaction.followUp({ content: "✅ Updated.", ephemeral: true });
+    }
+
+    // -------------------------
+    // ADD POINTS
+    // -------------------------
+    if (interaction.commandName === 'addpoints') {
+        const target = interaction.options.getUser('user');
+        const amount = interaction.options.getInteger('amount');
+
+        db.run(
+            `INSERT INTO leaderboard(user_id, username, points)
+             VALUES(?, ?, ?)
+             ON CONFLICT(user_id) DO UPDATE SET
+                points = points + ?,
+                username = excluded.username`,
+            [target.id, target.username, amount, amount],
+            async (err) => {
+                if (err) {
+                    console.error("addpoints error:", err);
+                    return interaction.reply({ content: "❌ Failed to add points.", ephemeral: true });
+                }
+
+                await updateLeaderboard();
+
+                return interaction.reply({
+                    content: `✅ Added **${amount}** point(s) to **${target.username}**.`,
+                    ephemeral: true
+                });
+            }
+        );
+
+        return;
+    }
+
+    // -------------------------
+    // REMOVE POINTS
+    // -------------------------
+    if (interaction.commandName === 'removepoints') {
+        const target = interaction.options.getUser('user');
+        const amount = interaction.options.getInteger('amount');
+
+        db.run(
+            `UPDATE leaderboard SET points = MAX(0, points - ?) WHERE user_id = ?`,
+            [amount, target.id],
+            async (err) => {
+                if (err) {
+                    console.error("removepoints error:", err);
+                    return interaction.reply({ content: "❌ Failed to remove points.", ephemeral: true });
+                }
+
+                await updateLeaderboard();
+
+                return interaction.reply({
+                    content: `✅ Removed **${amount}** point(s) from **${target.username}**.`,
+                    ephemeral: true
+                });
+            }
+        );
+
+        return;
     }
 });
 
