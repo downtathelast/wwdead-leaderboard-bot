@@ -1,8 +1,6 @@
 app = 'wwdead-leaderboard-bot'
 primary_region = 'sjc'
-
 [build]
-
 [mounts]
   source = "leaderboard_data"
   destination = "/data"
