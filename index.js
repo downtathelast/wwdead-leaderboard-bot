@@ -19,7 +19,7 @@ const sqlite3 = require('sqlite3').verbose();
 
 /*
 =====================================
-SAFETY NET
+SAFETY NETS
 =====================================
 */
 process.on('unhandledRejection', console.error);
