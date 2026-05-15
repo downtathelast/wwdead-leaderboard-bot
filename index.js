@@ -228,7 +228,7 @@ async function checkSeasonReset() {
 `**🏆 MVP**
 ${topUser ? `${topUser.username} — ${topUser.points}` : 'None'}
 
-${newMVP ? `🎖 Role assigned to ${newMVP.user.username}` : ''}
+${newMVP ? `🎖 Role assigned to ${newMVP.displayName}` : ''}
 
 A new quarter has started. All scores have been reset.`
                     )
@@ -280,6 +280,15 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
     if (reaction.message.author?.id === userId) return;
 
+    // Fetch guild member to get display name
+    let displayName = user.username;
+    try {
+        const member = await reaction.message.guild.members.fetch(userId);
+        displayName = member.displayName;
+    } catch (e) {
+        console.warn("Could not fetch member, falling back to username:", e);
+    }
+
     // Only first reaction counts
     db.get(
         `SELECT claimed_by FROM claims WHERE message_id = ?`,
@@ -298,7 +307,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
                  ON CONFLICT(user_id) DO UPDATE SET
                     points = points + 1,
                     username = excluded.username`,
-                [userId, user.username]
+                [userId, displayName]
             );
 
             await updateLeaderboard();
@@ -345,13 +354,22 @@ client.on('interactionCreate', async (interaction) => {
         const target = interaction.options.getUser('user');
         const amount = interaction.options.getInteger('amount');
 
+        // Fetch member to get display name
+        let displayName = target.username;
+        try {
+            const member = await interaction.guild.members.fetch(target.id);
+            displayName = member.displayName;
+        } catch (e) {
+            console.warn("Could not fetch member for addpoints:", e);
+        }
+
         db.run(
             `INSERT INTO leaderboard(user_id, username, points)
              VALUES(?, ?, ?)
              ON CONFLICT(user_id) DO UPDATE SET
                 points = points + ?,
                 username = excluded.username`,
-            [target.id, target.username, amount, amount],
+            [target.id, displayName, amount, amount],
             async (err) => {
                 if (err) {
                     console.error("addpoints error:", err);
@@ -361,7 +379,7 @@ client.on('interactionCreate', async (interaction) => {
                 await updateLeaderboard();
 
                 return interaction.reply({
-                    content: `✅ Added **${amount}** point(s) to **${target.username}**.`,
+                    content: `✅ Added **${amount}** point(s) to **${displayName}**.`,
                     ephemeral: true
                 });
             }
@@ -374,9 +392,18 @@ client.on('interactionCreate', async (interaction) => {
         const target = interaction.options.getUser('user');
         const amount = interaction.options.getInteger('amount');
 
+        // Fetch member to get display name
+        let displayName = target.username;
+        try {
+            const member = await interaction.guild.members.fetch(target.id);
+            displayName = member.displayName;
+        } catch (e) {
+            console.warn("Could not fetch member for removepoints:", e);
+        }
+
         db.run(
-            `UPDATE leaderboard SET points = MAX(0, points - ?) WHERE user_id = ?`,
-            [amount, target.id],
+            `UPDATE leaderboard SET points = MAX(0, points - ?), username = ? WHERE user_id = ?`,
+            [amount, displayName, target.id],
             async (err) => {
                 if (err) {
                     console.error("removepoints error:", err);
@@ -386,7 +413,7 @@ client.on('interactionCreate', async (interaction) => {
                 await updateLeaderboard();
 
                 return interaction.reply({
-                    content: `✅ Removed **${amount}** point(s) from **${target.username}**.`,
+                    content: `✅ Removed **${amount}** point(s) from **${displayName}**.`,
                     ephemeral: true
                 });
             }
