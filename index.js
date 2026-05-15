@@ -280,9 +280,10 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
     if (reaction.message.author?.id === userId) return;
 
+    // Only first reaction counts
     db.get(
-        `SELECT claimed_by FROM claims WHERE message_id = ? AND claimed_by = ?`,
-        [messageId, userId],
+        `SELECT claimed_by FROM claims WHERE message_id = ?`,
+        [messageId],
         async (err, row) => {
             if (err || row) return;
 
@@ -321,9 +322,6 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: "❌ Admin only.", ephemeral: true });
     }
 
-    // -------------------------
-    // RESET
-    // -------------------------
     if (interaction.commandName === 'reset-leaderboard') {
         await interaction.reply({ content: "Resetting leaderboard...", ephemeral: true });
 
@@ -335,9 +333,6 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.followUp({ content: "✅ Reset complete.", ephemeral: true });
     }
 
-    // -------------------------
-    // REFRESH
-    // -------------------------
     if (interaction.commandName === 'refresh-leaderboard') {
         await interaction.reply({ content: "🔄 Refreshing leaderboard...", ephemeral: true });
 
@@ -346,9 +341,6 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.followUp({ content: "✅ Updated.", ephemeral: true });
     }
 
-    // -------------------------
-    // ADD POINTS
-    // -------------------------
     if (interaction.commandName === 'addpoints') {
         const target = interaction.options.getUser('user');
         const amount = interaction.options.getInteger('amount');
@@ -378,9 +370,6 @@ client.on('interactionCreate', async (interaction) => {
         return;
     }
 
-    // -------------------------
-    // REMOVE POINTS
-    // -------------------------
     if (interaction.commandName === 'removepoints') {
         const target = interaction.options.getUser('user');
         const amount = interaction.options.getInteger('amount');
@@ -480,7 +469,7 @@ A quarterly leaderboard tracking verified revive assistance activity.
 
 **How it works**
 - React 💉 on a revive request = +1 point
-- Each message can only be claimed once per user
+- Only the first reaction per message earns a point
 - Scores reset every quarter (seasonal system)
 
 **Rules**
