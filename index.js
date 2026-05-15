@@ -250,13 +250,32 @@ async function updateLeaderboard() {
 UTILS
 =====================================
 */
+
 function buildEmbed(boardText) {
     return new EmbedBuilder()
-        .setTitle(`💉 Leaderboard — ${getSeasonKey()}`)
-        .setDescription(boardText)
-        .setFooter({ text: `Updated ${new Date().toLocaleString()}` });
-}
+        .setTitle(`💉 Top Responder Leaderboard — ${getSeasonKey()}`)
+        .setDescription(
+`**What this is**
+A quarterly leaderboard tracking verified revive assistance activity.
 
+**How it works**
+- React 💉 on a revive request = +1 point
+- Each message can only be claimed once per user
+- Scores reset every quarter (seasonal system)
+
+**Rules**
+- Do not farm reactions or coordinate fake revives
+- Abuse of the system may result in score removal or moderation action
+
+---
+
+**Leaderboard**
+${boardText}`
+        )
+        .setFooter({
+            text: `Updated ${new Date().toLocaleString()}`
+        });
+}
 /*
 =====================================
 LOGIN
