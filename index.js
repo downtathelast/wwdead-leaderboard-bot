@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 
 const {
     Client,
@@ -53,7 +54,8 @@ const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.GuildMessageReactions
+        GatewayIntentBits.GuildMessageReactions,
+        GatewayIntentBits.GuildMembers
     ],
     partials: [
         Partials.Message,
@@ -64,11 +66,9 @@ const client = new Client({
 
 /*
 =====================================
-DATABASE (FIXED FOR FLY.IO)
+DATABASE
 =====================================
 */
-
-// ensure /data exists (CRITICAL on Fly)
 const dataDir = '/data';
 if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
@@ -81,7 +81,6 @@ const db = new sqlite3.Database(dbPath, (err) => {
 });
 
 db.serialize(() => {
-
     db.run(`CREATE TABLE IF NOT EXISTS leaderboard (
         user_id TEXT PRIMARY KEY,
         username TEXT,
@@ -89,8 +88,9 @@ db.serialize(() => {
     )`);
 
     db.run(`CREATE TABLE IF NOT EXISTS claims (
-        message_id TEXT PRIMARY KEY,
-        claimed_by TEXT
+        message_id TEXT,
+        claimed_by TEXT,
+        PRIMARY KEY (message_id, claimed_by)
     )`);
 
     db.run(`CREATE TABLE IF NOT EXISTS config (
@@ -131,7 +131,6 @@ async function registerCommands() {
             Routes.applicationCommands(CLIENT_ID),
             { body: commands }
         );
-
         console.log("Slash commands registered.");
     } catch (err) {
         console.error("Slash command error:", err);
@@ -158,7 +157,6 @@ async function checkSeasonReset() {
     const current = getSeasonKey();
 
     db.get(`SELECT value FROM seasons WHERE key='current'`, async (err, row) => {
-
         if (!row) {
             db.run(`INSERT INTO seasons(key,value) VALUES('current',?)`, [current]);
             return;
@@ -178,10 +176,7 @@ async function checkSeasonReset() {
             try {
                 const members = await guild.members.fetch();
                 const oldMVP = members.find(m => m.roles.cache.has(TOP_ROLE_ID));
-
-                if (oldMVP) {
-                    await oldMVP.roles.remove(TOP_ROLE_ID).catch(() => {});
-                }
+                if (oldMVP) await oldMVP.roles.remove(TOP_ROLE_ID).catch(() => {});
             } catch (e) {
                 console.error("Failed removing old MVP:", e);
             }
@@ -226,7 +221,6 @@ client.once('ready', async () => {
     console.log(`💉 Online as ${client.user.tag}`);
 
     await registerCommands();
-
     await ensureLeaderboardMessage();
     await checkSeasonReset();
     await updateLeaderboard();
@@ -236,29 +230,70 @@ client.once('ready', async () => {
 
 /*
 =====================================
-SLASH COMMAND
+REACTION HANDLER
+=====================================
+*/
+client.on('messageReactionAdd', async (reaction, user) => {
+    if (user.bot) return;
+    if (reaction.emoji.name !== EMOJI) return;
+
+    if (reaction.partial) {
+        try { await reaction.fetch(); }
+        catch (e) { console.error("Failed to fetch reaction:", e); return; }
+    }
+
+    if (reaction.message.partial) {
+        try { await reaction.message.fetch(); }
+        catch (e) { console.error("Failed to fetch message:", e); return; }
+    }
+
+    const messageId = reaction.message.id;
+    const userId = user.id;
+
+    // Prevent self-reaction
+    if (reaction.message.author?.id === userId) return;
+
+    db.get(
+        `SELECT claimed_by FROM claims WHERE message_id = ? AND claimed_by = ?`,
+        [messageId, userId],
+        async (err, row) => {
+            if (err || row) return;
+
+            db.run(
+                `INSERT OR IGNORE INTO claims(message_id, claimed_by) VALUES(?, ?)`,
+                [messageId, userId]
+            );
+
+            db.run(
+                `INSERT INTO leaderboard(user_id, username, points)
+                 VALUES(?, ?, 1)
+                 ON CONFLICT(user_id) DO UPDATE SET
+                    points = points + 1,
+                    username = excluded.username`,
+                [userId, user.username]
+            );
+
+            await updateLeaderboard();
+        }
+    );
+});
+
+/*
+=====================================
+SLASH COMMANDS
 =====================================
 */
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
 
-    // -------------------------
-    // ADMIN CHECK (shared)
-    // -------------------------
     const isAdmin = interaction.memberPermissions?.has(
         PermissionsBitField.Flags.Administrator
     );
 
     if (!isAdmin) {
-        return interaction.reply({
-            content: "❌ Admin only.",
-            ephemeral: true
-        });
+        return interaction.reply({ content: "❌ Admin only.", ephemeral: true });
     }
 
-    // -------------------------
-    // RESET COMMAND
-    // -------------------------
     if (interaction.commandName === 'reset-leaderboard') {
         await interaction.reply({ content: "Resetting leaderboard...", ephemeral: true });
 
@@ -270,9 +305,6 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.followUp({ content: "✅ Reset complete.", ephemeral: true });
     }
 
-    // -------------------------
-    // REFRESH COMMAND
-    // -------------------------
     if (interaction.commandName === 'refresh-leaderboard') {
         await interaction.reply({ content: "🔄 Refreshing leaderboard...", ephemeral: true });
 
@@ -320,7 +352,6 @@ async function updateLeaderboard() {
         db.all(
             `SELECT username, points FROM leaderboard ORDER BY points DESC LIMIT 50`,
             async (err, rows) => {
-
                 if (err) return;
 
                 let board = "No activity yet.";
@@ -332,7 +363,6 @@ async function updateLeaderboard() {
                             i === 1 ? '🥈' :
                             i === 2 ? '🥉' :
                             `${i + 1}.`;
-
                         return `${medal} ${r.username} — ${r.points} 💉`;
                     }).join("\n");
                 }
@@ -348,7 +378,6 @@ async function updateLeaderboard() {
 UTILS
 =====================================
 */
-
 function buildEmbed(boardText) {
     return new EmbedBuilder()
         .setTitle(`💉 Top Responder Leaderboard — ${getSeasonKey()}`)
@@ -370,9 +399,7 @@ A quarterly leaderboard tracking verified revive assistance activity.
 **Leaderboard**
 ${boardText}`
         )
-        .setFooter({
-            text: `Updated ${new Date().toLocaleString()}`
-        });
+        .setFooter({ text: `Updated ${new Date().toLocaleString()}` });
 }
 
 async function getTopUser() {
@@ -383,6 +410,15 @@ async function getTopUser() {
         );
     });
 }
+
+/*
+=====================================
+HEALTH CHECK (FLY.IO)
+=====================================
+*/
+http.createServer((req, res) => res.end('OK')).listen(3000, '0.0.0.0', () => {
+    console.log('Health check listening on port 3000');
+});
 
 /*
 =====================================
