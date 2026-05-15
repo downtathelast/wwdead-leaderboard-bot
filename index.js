@@ -146,6 +146,74 @@ function getSeasonKey() {
 
 /*
 =====================================
+SEASON RESET
+=====================================
+*/
+async function checkSeasonReset() {
+    const current = getSeasonKey();
+
+    db.get(`SELECT value FROM seasons WHERE key='current'`, async (err, row) => {
+
+        if (!row) {
+            db.run(`INSERT INTO seasons(key,value) VALUES('current',?)`, [current]);
+            return;
+        }
+
+        if (row.value === current) return;
+
+        const channel = await client.channels.fetch(LEADERBOARD_CHANNEL_ID);
+        if (!channel) return;
+
+        const topUser = await getTopUser();
+        const guild = channel.guild;
+
+        let newMVP = null;
+
+        if (TOP_ROLE_ID) {
+            try {
+                const members = await guild.members.fetch();
+                const oldMVP = members.find(m => m.roles.cache.has(TOP_ROLE_ID));
+
+                if (oldMVP) {
+                    await oldMVP.roles.remove(TOP_ROLE_ID).catch(() => {});
+                }
+            } catch (e) {
+                console.error("Failed removing old MVP:", e);
+            }
+        }
+
+        if (topUser && TOP_ROLE_ID) {
+            try {
+                const member = await guild.members.fetch(topUser.user_id);
+                await member.roles.add(TOP_ROLE_ID);
+                newMVP = member;
+            } catch (e) {
+                console.error("MVP role assignment failed:", e);
+            }
+        }
+
+        await channel.send({
+            embeds: [
+                new EmbedBuilder()
+                    .setTitle(`🏁 Season Complete — ${row.value}`)
+                    .setDescription(
+`**🏆 MVP**
+${topUser ? `${topUser.username} — ${topUser.points}` : 'None'}
+
+${newMVP ? `🎖 Role assigned to ${newMVP.user.username}` : ''}
+
+A new quarter has started. All scores have been reset.`
+                    )
+            ]
+        });
+
+        db.run(`UPDATE leaderboard SET points = 0`);
+        db.run(`UPDATE seasons SET value=? WHERE key='current'`, [current]);
+    });
+}
+
+/*
+=====================================
 READY
 =====================================
 */
