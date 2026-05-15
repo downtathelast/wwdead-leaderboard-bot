@@ -344,6 +344,16 @@ ${boardText}`
             text: `Updated ${new Date().toLocaleString()}`
         });
 }
+
+async function getTopUser() {
+    return new Promise(res => {
+        db.get(
+            `SELECT user_id, username, points FROM leaderboard ORDER BY points DESC LIMIT 1`,
+            (err, row) => res(row || null)
+        );
+    });
+}
+
 /*
 =====================================
 LOGIN
